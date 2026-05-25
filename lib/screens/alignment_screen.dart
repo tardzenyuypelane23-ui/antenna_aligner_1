@@ -118,15 +118,11 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
         children: [
           // AR View - Must have a size and be in the widget tree to initialize
           Positioned.fill(
-            child: IgnorePointer(
-              child: Opacity(
-                opacity: 0.8, // Increased for better sensor priority and user feedback
-                child: ARView(
-                  onARViewCreated: (sessionManager, objectManager, anchorManager, locationManager) {
-                    ArCoreService.instance.onARViewCreated(sessionManager, objectManager, anchorManager, locationManager);
-                  },
-                ),
-              ),
+            child: ARView(
+              onARViewCreated: (sessionManager, objectManager, anchorManager, locationManager) {
+                print("WIDGET: ARView.onARViewCreated fired!");
+                ArCoreService.instance.onARViewCreated(sessionManager, objectManager, anchorManager, locationManager);
+              },
             ),
           ),
           
