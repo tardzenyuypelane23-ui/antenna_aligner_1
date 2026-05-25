@@ -27,45 +27,57 @@ class _APManagerScreenState extends State<APManagerScreen> {
   void initState() {
     super.initState();
     _refreshAccessPoints();
+    
+    // Add listeners to keep UI in sync with manual input
+    _nameController.addListener(_onInputChanged);
+    _latitudeController.addListener(_onInputChanged);
+    _longitudeController.addListener(_onInputChanged);
+    _altitudeController.addListener(_onInputChanged);
   }
 
-  void _refreshAccessPoints() {
-    _accessPointsFuture = DatabaseService.instance.getAccessPoints();
+  @override
+  void dispose() {
+    _nameController.removeListener(_onInputChanged);
+    _latitudeController.removeListener(_onInputChanged);
+    _longitudeController.removeListener(_onInputChanged);
+    _altitudeController.removeListener(_onInputChanged);
+    _nameController.dispose();
+    _latitudeController.dispose();
+    _longitudeController.dispose();
+    _altitudeController.dispose();
+    super.dispose();
   }
 
-  Future<void> _captureCurrentLocation() async {
-    setState(() {
-      _isCapturingLocation = true;
-    });
+  void _onInputChanged() {
+    // We still call setState to update the UI (like clear buttons or field styles)
+    // but we won't disable the "Add" button anymore.
+    if (mounted) setState(() {});
+  }
 
-    try {
-      final position = await GeolocatorService.instance.getCurrentPosition();
-      _latitudeController.text = position.latitude.toStringAsFixed(6);
-      _longitudeController.text = position.longitude.toStringAsFixed(6);
-      _altitudeController.text = position.altitude.toStringAsFixed(1);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to capture location: $error')),
-      );
-    } finally {
-      setState(() {
-        _isCapturingLocation = false;
-      });
-    }
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+    );
   }
 
   Future<void> _saveAccessPoint() async {
-    final name = _nameController.text;
+    final name = _nameController.text.trim();
     final latitude = double.tryParse(_latitudeController.text);
     final longitude = double.tryParse(_longitudeController.text);
     final altitude = double.tryParse(_altitudeController.text) ?? 0.0;
 
-    if (!Validators.isNonEmptyString(name) || latitude == null || longitude == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter valid coordinates and a name.')),
-      );
+    if (name.isEmpty) {
+      _showError('Please enter an Access Point name.');
+      return;
+    }
+
+    if (latitude == null || latitude < -90 || latitude > 90) {
+      _showError('Please enter a valid Latitude (-90 to 90).');
+      return;
+    }
+
+    if (longitude == null || longitude < -180 || longitude > 180) {
+      _showError('Please enter a valid Longitude (-180 to 180).');
       return;
     }
 
@@ -83,30 +95,69 @@ class _APManagerScreenState extends State<APManagerScreen> {
     _longitudeController.clear();
     _altitudeController.clear();
 
+    _refreshAccessPoints();
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Access Point saved successfully.')),
+      );
+    }
+  }
+
+  bool _isSaveButtonEnabled() {
+    // Now we only disable the button if we are currently capturing.
+    // This makes manual input feel more responsive.
+    return !_isCapturingLocation;
+  }
+
+  void _refreshAccessPoints() {
     setState(() {
-      _refreshAccessPoints();
+      _accessPointsFuture = DatabaseService.instance.getAccessPoints();
     });
   }
 
-  Future<void> _deleteAccessPoint(int id) async {
+  Future<void> _captureCurrentLocation() async {
+    setState(() {
+      _isCapturingLocation = true;
+    });
+
+    try {
+      final position = await GeolocatorService.instance.getCurrentPosition();
+      _latitudeController.text = position.latitude.toString();
+      _longitudeController.text = position.longitude.toString();
+      _altitudeController.text = position.altitude.toString();
+    } catch (e) {
+      _showError("Failed to capture location: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCapturingLocation = false;
+        });
+      }
+    }
+  }
+
+  void _deleteAccessPoint(int id) {
+    // We call the async deletion without awaiting to match the 'void Function(int)' signature
+    _performDeletion(id);
+  }
+
+  Future<void> _performDeletion(int id) async {
+    await DatabaseService.instance.removeAccessPoint(id);
+    _refreshAccessPoints();
+    
+    // If the deleted AP was the selected one, clear selection
     if (SettingsService.instance.selectedAccessPoint?.id == id) {
       SettingsService.instance.selectedAccessPoint = null;
-      FusionService.instance.stop();
     }
-    await DatabaseService.instance.removeAccessPoint(id);
-    setState(() {
-      _refreshAccessPoints();
-    });
   }
 
   void _selectAccessPoint(AccessPoint ap) {
     setState(() {
       SettingsService.instance.selectedAccessPoint = ap;
-      FusionService.instance.stop();
-      FusionService.instance.start(ap);
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Selected ${ap.name} for alignment')),
+      SnackBar(content: Text('Selected: ${ap.name}')),
     );
   }
 
@@ -121,12 +172,16 @@ class _APManagerScreenState extends State<APManagerScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     TextField(
                       controller: _nameController,
-                      decoration: const InputDecoration(labelText: 'Access Point Name'),
+                      decoration: const InputDecoration(
+                        labelText: 'Access Point Name',
+                        hintText: 'e.g. Sector 1 Tower',
+                      ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 16),
                     Row(
                       children: [
                         Expanded(
@@ -144,43 +199,47 @@ class _APManagerScreenState extends State<APManagerScreen> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    if (_latitudeController.text.isNotEmpty)
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Captured Location:',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _latitudeController,
-                            readOnly: true,
-                            decoration: const InputDecoration(labelText: 'Latitude'),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _longitudeController,
-                            readOnly: true,
-                            decoration: const InputDecoration(labelText: 'Longitude'),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _altitudeController,
-                            readOnly: true,
-                            decoration: const InputDecoration(labelText: 'Altitude (m)'),
-                          ),
-                          const SizedBox(height: 12),
-                        ],
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Target Coordinates (Manual or Captured)',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _latitudeController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Latitude',
+                        hintText: 'e.g. 45.123456',
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _longitudeController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Longitude',
+                        hintText: 'e.g. -75.654321',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _altitudeController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Altitude (m)',
+                        hintText: 'e.g. 15.0',
+                      ),
+                    ),
+                    const SizedBox(height: 24),
                     Row(
                       children: [
                         Expanded(
                           child: ElevatedButton(
-                            onPressed: _latitudeController.text.isNotEmpty && _nameController.text.isNotEmpty
-                                ? _saveAccessPoint
-                                : null,
+                            onPressed: _isSaveButtonEnabled() ? _saveAccessPoint : null,
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
                             child: const Text('Add Access Point'),
                           ),
                         ),

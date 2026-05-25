@@ -15,6 +15,8 @@ dependencies:
   flutter_compass: ^0.8.1
   flutter_blue_plus: ^1.31.0
   permission_handler: ^11.3.1
+  sqflite: ^2.3.0
+  path: ^1.9.0
 
 dev_dependencies:
   flutter_test:

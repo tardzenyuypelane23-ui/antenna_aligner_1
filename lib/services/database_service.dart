@@ -1,33 +1,71 @@
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
 import 'package:antenna_aligner/models/access_point.dart';
 
 class DatabaseService {
   DatabaseService._internal();
   static final DatabaseService instance = DatabaseService._internal();
 
-  final List<AccessPoint> _accessPoints = <AccessPoint>[];
-  int _nextId = 1;
+  Database? _database;
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDatabase();
+    return _database!;
+  }
+
+  Future<Database> _initDatabase() async {
+    final dbPath = await getDatabasesPath();
+    final path = join(dbPath, 'antenna_aligner.db');
+
+    return await openDatabase(
+      path,
+      version: 1,
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE access_points (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            altitude REAL NOT NULL
+          )
+        ''');
+      },
+    );
+  }
 
   Future<List<AccessPoint>> getAccessPoints() async {
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-    return List<AccessPoint>.unmodifiable(_accessPoints);
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query('access_points');
+    return maps.map((map) => AccessPoint.fromMap(map)).toList();
   }
 
   Future<void> addAccessPoint(AccessPoint accessPoint) async {
-    final newPoint = accessPoint.copyWith(id: _nextId++);
-    _accessPoints.add(newPoint);
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final db = await database;
+    await db.insert(
+      'access_points',
+      accessPoint.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<void> removeAccessPoint(int id) async {
-    _accessPoints.removeWhere((item) => item.id == id);
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final db = await database;
+    await db.delete(
+      'access_points',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> updateAccessPoint(AccessPoint accessPoint) async {
-    final index = _accessPoints.indexWhere((item) => item.id == accessPoint.id);
-    if (index >= 0) {
-      _accessPoints[index] = accessPoint;
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final db = await database;
+    await db.update(
+      'access_points',
+      accessPoint.toMap(),
+      where: 'id = ?',
+      whereArgs: [accessPoint.id],
+    );
   }
 }

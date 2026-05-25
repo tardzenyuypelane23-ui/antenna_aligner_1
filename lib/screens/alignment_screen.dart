@@ -33,6 +33,25 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
   }
 
   Future<void> _initializeAlignment() async {
+    // 1. Request Camera Permission (Critical for AR)
+    final hasCamera = await ArCoreService.instance.requestPermissions();
+    if (!hasCamera && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera permission is required for AR tracking.')),
+      );
+    }
+
+    // 2. Request Location Permission (Critical for GPS)
+    try {
+      await GeolocatorService.instance.requestPermissions();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Location error: $e')),
+        );
+      }
+    }
+
     final accessPoints = await DatabaseService.instance.getAccessPoints();
     final selectedAp = SettingsService.instance.selectedAccessPoint ?? 
                       (accessPoints.isNotEmpty ? accessPoints.first : null);
@@ -101,7 +120,7 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
           Positioned.fill(
             child: IgnorePointer(
               child: Opacity(
-                opacity: 0.1, // Keep it nearly invisible if preferred
+                opacity: 0.8, // Increased for better sensor priority and user feedback
                 child: ARView(
                   onARViewCreated: (sessionManager, objectManager, anchorManager, locationManager) {
                     ArCoreService.instance.onARViewCreated(sessionManager, objectManager, anchorManager, locationManager);
@@ -116,28 +135,47 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
                 return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const CircularProgressIndicator(),
-                      const SizedBox(height: 24),
-                      StreamBuilder<String>(
-                        stream: FusionService.instance.statusStream,
-                        initialData: "Initializing...",
-                        builder: (context, statusSnapshot) {
-                          return Text(
-                            statusSnapshot.data ?? "Initializing...",
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        "Please move your device slowly to initialize AR tracking",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ],
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 32),
+                        StreamBuilder<String>(
+                          stream: FusionService.instance.statusStream,
+                          initialData: "Initializing...",
+                          builder: (context, statusSnapshot) {
+                            final status = statusSnapshot.data ?? "Initializing...";
+                            String hint = "Starting sensors...";
+                            
+                            if (status.contains("GPS")) {
+                              hint = "Waiting for satellite lock. Ensure you have a clear view of the sky.";
+                            } else if (status.contains("AR") || status.contains("Tracking")) {
+                              hint = "Please move your device slowly to initialize AR tracking";
+                            } else if (status.contains("Initializing")) {
+                              hint = "Calibrating inertial sensors...";
+                            }
+
+                            return Column(
+                              children: [
+                                Text(
+                                  status,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  hint,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   ),
                 );
               }

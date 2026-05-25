@@ -67,8 +67,9 @@ class FusionService {
     
     _poseSub = ArCoreService.instance.poseUpdates.listen((pose) {
       _predict(pose);
+      // If we have AR but no GPS yet, update status to reassure the user
       if (_refLla == null) {
-        _setStatus("AR Tracking Active. Waiting for GPS...");
+        _setStatus("AR Active. Waiting for GPS lock...");
       }
     });
     
@@ -132,6 +133,13 @@ class FusionService {
     _gpsSub = null;
     _compassSub = null;
     _targetAP = null;
+    _lastArPose = null;
+    _lastError = null; // Clear stale data
+    _refLla = null;
+    _refEcef = null;
+    _targetEnu = null;
+    _isCalibrated = false;
+    _setStatus("Stopped");
   }
 
   void _predict(ArCorePose pose) {
@@ -139,6 +147,15 @@ class FusionService {
 
     if (_lastArPose == null) {
       _lastArPose = pose;
+      // Initialize EKF orientation with first pose
+      _currentState = EKFState(
+        position: _currentState.position,
+        velocity: _currentState.velocity,
+        orientation: pose.rotation,
+        covariance: _currentState.covariance,
+        timestamp: DateTime.now(),
+      );
+      _processAndEmit(); // Process immediately to clear the "Loading" state
       return;
     }
 
@@ -203,7 +220,22 @@ class FusionService {
   }
 
   void _processAndEmit() {
-    if (_targetAP == null || _targetEnu == null || _refLla == null) return;
+    // If we are missing critical data, we update the status but don't emit a pointing error yet.
+    // This allows the UI to show specific "Waiting for..." messages instead of a generic spinner.
+    if (_targetAP == null) return;
+    
+    if (_refLla == null) {
+      _setStatus("Waiting for GPS lock...");
+      return;
+    }
+    if (_targetEnu == null) {
+      _updateTargetEnu();
+      if (_targetEnu == null) return;
+    }
+    if (_lastArPose == null) {
+      _setStatus("Waiting for AR tracking...");
+      return;
+    }
 
     // 1. Get robust heading from orientation quaternion
     final heading = PointingService.instance.getHeadingFromQuaternion(_currentState.orientation);

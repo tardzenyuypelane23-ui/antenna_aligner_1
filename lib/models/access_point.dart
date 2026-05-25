@@ -43,9 +43,9 @@ class AccessPoint {
     return AccessPoint(
       id: map['id'] as int?,
       name: map['name'] as String,
-      latitude: map['latitude'] as double,
-      longitude: map['longitude'] as double,
-      altitude: map['altitude'] as double,
+      latitude: (map['latitude'] as num).toDouble(),
+      longitude: (map['longitude'] as num).toDouble(),
+      altitude: (map['altitude'] as num).toDouble(),
     );
   }
 }
