@@ -126,62 +126,71 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
             ),
           ),
           
-          StreamBuilder<PointingError>(
-            stream: FusionService.instance.pointingStream,
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 32),
-                        StreamBuilder<String>(
-                          stream: FusionService.instance.statusStream,
-                          initialData: "Initializing...",
-                          builder: (context, statusSnapshot) {
-                            final status = statusSnapshot.data ?? "Initializing...";
-                            String hint = "Starting sensors...";
-                            
-                            if (status.contains("GPS")) {
-                              hint = "Waiting for satellite lock. Ensure you have a clear view of the sky.";
-                            } else if (status.contains("AR") || status.contains("Tracking")) {
-                              hint = "Please move your device slowly to initialize AR tracking";
-                            } else if (status.contains("Initializing")) {
-                              hint = "Calibrating inertial sensors...";
-                            }
+          Positioned.fill(
+            child: StreamBuilder<PointingError>(
+              stream: FusionService.instance.pointingStream,
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return Container(
+                    color: Colors.black.withAlpha(100), // Semi-transparent overlay while loading
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const CircularProgressIndicator(color: Colors.white),
+                            const SizedBox(height: 32),
+                            StreamBuilder<String>(
+                              stream: FusionService.instance.statusStream,
+                              initialData: "Initializing...",
+                              builder: (context, statusSnapshot) {
+                                final status = statusSnapshot.data ?? "Initializing...";
+                                String hint = "Starting sensors...";
+                                
+                                if (status.contains("GPS")) {
+                                  hint = "Waiting for satellite lock. Ensure you have a clear view of the sky.";
+                                } else if (status.contains("AR") || status.contains("Tracking")) {
+                                  hint = "Please move your device slowly to initialize AR tracking";
+                                } else if (status.contains("Initializing")) {
+                                  hint = "Calibrating inertial sensors...";
+                                }
 
-                            return Column(
-                              children: [
-                                Text(
-                                  status,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  hint,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
-                                ),
-                              ],
-                            );
-                          },
+                                return Column(
+                                  children: [
+                                    Text(
+                                      status,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        fontSize: 18, 
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      hint,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                );
-              }
-              
-              if (snapshot.hasError) {
-                return Center(child: Text('Error: ${snapshot.error}'));
-              }
+                  );
+                }
+                
+                if (snapshot.hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.red)));
+                }
 
-              return AlignmentDisplay(pointingError: snapshot.data!);
-            },
+                return AlignmentDisplay(pointingError: snapshot.data!);
+              },
+            ),
           ),
 
           // Sensor Status Indicators

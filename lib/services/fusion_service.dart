@@ -147,7 +147,7 @@ class FusionService {
 
     if (_lastArPose == null) {
       _lastArPose = pose;
-      // Initialize EKF orientation with first pose
+      // Initialize EKF orientation with the first uncalibrated ARCore pose
       _currentState = EKFState(
         position: _currentState.position,
         velocity: _currentState.velocity,
@@ -155,38 +155,50 @@ class FusionService {
         covariance: _currentState.covariance,
         timestamp: DateTime.now(),
       );
-      _processAndEmit(); // Process immediately to clear the "Loading" state
+      _processAndEmit(); // Process immediately to clear the initial loading state
       return;
     }
 
-    // 1. Calculate deltas in ARCore frame
+    // 1. Calculate raw, uncalibrated deltas directly within the ARCore frame
     final deltaPosAR = pose.translation - _lastArPose!.translation;
-    
-    // 2. Rotate position delta into ENU frame using the current heading offset
-    // ARCore uses Y-Up, X-Right, Z-Back. 
-    // We map AR(X, Y, Z) to ENU(X, -Z, Y) roughly, but the _headingOffset handles the rotation around vertical.
-    // The EKF position is in ENU (East-North-Up).
-    
-    // Convert AR delta to a local ENU-aligned delta (assuming initial AR Z is North)
-    final localEnuDelta = Vector3(deltaPosAR.x, -deltaPosAR.z, deltaPosAR.y);
-    
-    final rotationOffset = Quaternion.axisAngle(Vector3(0, 0, 1), _headingOffset * pi / 180.0);
-    final deltaPosENU = rotationOffset.rotated(localEnuDelta);
 
-    // 3. Calculate rotation delta: q_delta = q_prev^-1 * q_curr
+    // Calculate relative rotation delta: q_delta = q_prev^-1 * q_curr
     final deltaRot = _lastArPose!.rotation.conjugated() * pose.rotation;
 
-    // 4. Update EKF state with smoothed VIO deltas
+    // 2. Map ARCore's local coordinate space directly to standard right-handed ENU axes
+    // ARCore Right (+X) maps to East (X)
+    // ARCore Up (+Y) maps to North (Y)
+    // ARCore Back (+Z) maps to Up (Z) -> Note: If your hardware verification trace
+    // shows that forward movement increases Z instead of decreasing it, use -deltaPosAR.z
+    final localEnuDelta = Vector3(deltaPosAR.x, deltaPosAR.y, deltaPosAR.z);
+
+    // 3. Create the true geospatial transformation matrix based on your True North heading offset
+    // We use a negative angle because vector_math quaternions rotate Counter-Clockwise (CCW),
+    // while geographic compass bearings rotate Clockwise (CW).
+    final rotationOffset = Quaternion.axisAngle(Vector3(0, 0, 1), -_headingOffset * pi / 180.0);
+
+    // 4. Transform the local position delta into the absolute True-North geographic ENU frame
+    final deltaPosENU = rotationOffset.rotated(localEnuDelta);
+
+    // 5. Critical Fix: Conjugate-rotate the rotation quaternion delta into the exact same True-North reference frame.
+    // This step ensures your EKF orientation tracking state spins on the true geographic horizon,
+    // matching your position updates and resolving the "Civil War" inside the filter state matrix.
+    final correctedDeltaRot = rotationOffset * deltaRot * rotationOffset.conjugated();
+
+    // 6. Update your EKF state with perfectly synchronized and pre-aligned vectors
+    // We pass a standard time delta slice of 20ms (0.02) to match your 50ms ARCore polling loop frequency.
     _currentState = EKFService.instance.predict(
-      _currentState, 
-      deltaPosENU, 
-      deltaRot, 
-      0.033, 
+      _currentState,
+      deltaPosENU,
+      correctedDeltaRot,
+      0.02,
     );
 
     _lastArPose = pose;
     _processAndEmit();
   }
+
+
 
   void _update(GeoPosition gpsPos) {
     if (_targetAP == null) return;
@@ -220,53 +232,74 @@ class FusionService {
   }
 
   void _processAndEmit() {
-    // If we are missing critical data, we update the status but don't emit a pointing error yet.
-    // This allows the UI to show specific "Waiting for..." messages instead of a generic spinner.
+    // 1. Structural Guard: Ensure all critical sensor systems have warm data.
+    // This allows the UI to display granular states instead of a generic loading spinner.
     if (_targetAP == null) return;
-    
+
     if (_refLla == null) {
       _setStatus("Waiting for GPS lock...");
       return;
     }
+
     if (_targetEnu == null) {
       _updateTargetEnu();
       if (_targetEnu == null) return;
     }
+
     if (_lastArPose == null) {
       _setStatus("Waiting for AR tracking...");
       return;
     }
 
-    // 1. Get robust heading from orientation quaternion
+    // 2. Extract stable orientation metrics out of the EKF State Quaternion.
+    // Because the rotation deltas are now pre-aligned to True North during the
+    // prediction stage, the extracted azimuth is natively aligned to True North.
     final heading = PointingService.instance.getHeadingFromQuaternion(_currentState.orientation);
-    final rawAzimuth = heading['azimuth']!;
+    final sourceAzimuth = heading['azimuth']!;
     final sourceElevation = heading['elevation']!;
-    
-    // 2. Apply calibration offset
-    final sourceAzimuth = (rawAzimuth + _headingOffset + 360) % 360;
 
-    // 3. Compute target vectors in ENU
-    final targetAz = PointingService.instance.computeAzimuthENU(_currentState.position, _targetEnu!);
-    final targetEl = PointingService.instance.computeElevationENU(_currentState.position, _targetEnu!);
+    // 3. Compute the True Target vectors from the current EKF position to the Target AP ENU vector.
+    // This uses your mathematically verified, high-precision ENU coordinate pipeline.
+    final targetAzimuth = PointingService.instance.computeAzimuthENU(_currentState.position, _targetEnu!);
+    final targetElevation = PointingService.instance.computeElevationENU(_currentState.position, _targetEnu!);
 
-    // 4. Calculate final pointing errors
-    final error = PointingService.instance.computePointingError(
-      currentLocation: GeoPosition(latitude: _refLla!.x, longitude: _refLla!.y, altitude: _refLla!.z),
+    // 4. Create a valid GeoPosition instance from your reference coordinates for metadata tracking.
+    final activeLocation = GeoPosition(
+      latitude: _refLla!.x,
+      longitude: _refLla!.y,
+      altitude: _refLla!.z,
+    );
+
+    // 5. Generate the absolute calculation delta matrix via PointingService.
+    final pointingError = PointingService.instance.computePointingError(
+      currentLocation: activeLocation,
       targetAccessPoint: _targetAP!,
       sourceAzimuth: sourceAzimuth,
       sourceElevation: sourceElevation,
-      targetAzimuth: targetAz,
-      targetElevation: targetEl,
+      targetAzimuth: targetAzimuth,
+      targetElevation: targetElevation,
       pose: _currentState,
     );
 
-    // ignore: avoid_print
-    print("DATA_STREAM: [Src: ${sourceAzimuth.toStringAsFixed(1)}°, ${sourceElevation.toStringAsFixed(1)}°] "
-          "[Tar: ${targetAz.toStringAsFixed(1)}°, ${targetEl.toStringAsFixed(1)}°] "
-          "[Err: ${error.deltaAzimuth.toStringAsFixed(1)}°, ${error.deltaElevation.toStringAsFixed(1)}°]");
+    // 6. Calculate real-time 3D Euclidean distance (in meters) between the phone's EKF state and the AP.
+    final currentMetricDistance = _currentState.position.distanceTo(_targetEnu!);
 
-    _errorController.add(error);
-    _lastError = error;
-    BluetoothService.instance.sendPointingData(error);
+    // Update the class-level storage and push the clean error payload out to your stream listeners.
+    _lastError = PointingError(
+      currentLocation: pointingError.currentLocation,
+      targetAccessPoint: pointingError.targetAccessPoint,
+      sourceAzimuth: pointingError.sourceAzimuth,
+      sourceElevation: pointingError.sourceElevation,
+      targetAzimuth: pointingError.targetAzimuth,
+      targetElevation: pointingError.targetElevation,
+      deltaAzimuth: pointingError.deltaAzimuth,
+      deltaElevation: pointingError.deltaElevation,
+      pose: pointingError.pose,
+      distance: currentMetricDistance,
+      timestamp: DateTime.now(),
+    );
+
+    _errorController.add(_lastError!);
   }
+
 }

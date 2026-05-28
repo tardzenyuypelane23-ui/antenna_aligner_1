@@ -15,47 +15,110 @@ class AlignmentDisplay extends StatelessWidget {
     final totalError = (pointingError.deltaAzimuth.abs() + pointingError.deltaElevation.abs());
     final color = _getErrorColor(totalError);
 
-    return SingleChildScrollView(
+    return Stack(
+      children: [
+        // Reticle (Always centered)
+        Center(child: _buildReticle(context, color)),
+
+        // HUD - Stats at the top
+        Positioned(
+          top: 60, // Below status icons
+          left: 16,
+          right: 16,
+          child: _buildHUD(context, color),
+        ),
+
+        // Calibration Button at the bottom
+        Positioned(
+          bottom: 40,
+          left: 0,
+          right: 0,
+          child: _buildCalibrationTools(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHUD(BuildContext context, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black.withAlpha(180),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withAlpha(150), width: 2),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withAlpha(100), blurRadius: 10)
+        ],
+      ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          _buildReticle(context, color),
-          _buildCalibrationTools(context),
-          _buildErrorSummary(context, color),
-          _buildDetailedStats(context),
+          Row(
+            children: [
+              _hudStat('AZ ERR', '${pointingError.deltaAzimuth.toStringAsFixed(1)}°', color),
+              const SizedBox(width: 16),
+              _hudStat('EL ERR', '${pointingError.deltaElevation.toStringAsFixed(1)}°', color),
+            ],
+          ),
+          const Divider(color: Colors.white24, height: 20),
+          _hudRow('CURRENT', '${pointingError.sourceAzimuth.toStringAsFixed(1)}° / ${pointingError.sourceElevation.toStringAsFixed(1)}°'),
+          _hudRow('TARGET', '${pointingError.targetAzimuth.toStringAsFixed(1)}° / ${pointingError.targetElevation.toStringAsFixed(1)}°'),
+          _hudRow('DISTANCE', '${pointingError.distance.toStringAsFixed(1)}m'),
+        ],
+      ),
+    );
+  }
+
+  Widget _hudStat(String label, String value, Color color) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+          Text(value, style: TextStyle(color: color, fontSize: 28, fontWeight: FontWeight.w900)),
+        ],
+      ),
+    );
+  }
+
+  Widget _hudRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
         ],
       ),
     );
   }
 
   Widget _buildCalibrationTools(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          ElevatedButton.icon(
-            onPressed: () {
-              FusionService.instance.calibrateNorth();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Heading Calibrated to North')),
-              );
-            },
-            icon: const Icon(Icons.compass_calibration),
-            label: const Text('Calibrate North'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blueGrey.shade800,
-              foregroundColor: Colors.white,
-            ),
-          ),
-        ],
+    return Center(
+      child: ElevatedButton.icon(
+        onPressed: () {
+          FusionService.instance.calibrateNorth();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Heading Calibrated to North')),
+          );
+        },
+        icon: const Icon(Icons.compass_calibration),
+        label: const Text('CALIBRATE NORTH'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.blueGrey.shade900.withAlpha(200),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          side: const BorderSide(color: Colors.white24),
+        ),
       ),
     );
   }
 
   Widget _buildReticle(BuildContext context, Color color) {
-    return Container(
+    return SizedBox(
+      width: 300,
       height: 300,
-      margin: const EdgeInsets.symmetric(vertical: 24),
       child: Stack(
         alignment: Alignment.center,
         children: [
@@ -65,101 +128,40 @@ class AlignmentDisplay extends StatelessWidget {
             height: (index + 1) * 80.0,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: Colors.grey.withAlpha(77), width: 1),
+              border: Border.all(color: Colors.white.withAlpha(40), width: 1),
             ),
           )),
           // Crosshairs
-          Container(width: 2, height: 240, color: Colors.grey.withAlpha(51)),
-          Container(width: 240, height: 2, color: Colors.grey.withAlpha(51)),
+          Container(width: 1, height: 260, color: Colors.white.withAlpha(30)),
+          Container(width: 260, height: 1, color: Colors.white.withAlpha(30)),
           
-          // The Target Dot (Moving based on error)
-          // We map -10 to +10 degrees error to -100 to +100 pixels
+          // The Target Dot
           AnimatedAlign(
             duration: const Duration(milliseconds: 100),
             alignment: Alignment(
               (pointingError.deltaAzimuth / 10.0).clamp(-1.0, 1.0),
-              (pointingError.deltaElevation / 10.0).clamp(-1.0, 1.0),
+              (-pointingError.deltaElevation / 10.0).clamp(-1.0, 1.0),
             ),
             child: Container(
-              width: 40,
-              height: 40,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
-                color: color.withAlpha(179),
+                color: color.withAlpha(200),
                 shape: BoxShape.circle,
-                border: Border.all(color: color, width: 3),
-                boxShadow: [BoxShadow(color: color.withAlpha(128), blurRadius: 10)],
+                border: Border.all(color: Colors.white, width: 2),
+                boxShadow: [BoxShadow(color: color.withAlpha(150), blurRadius: 15)],
               ),
-              child: const Icon(Icons.gps_fixed, color: Colors.white, size: 20),
+              child: const Icon(Icons.gps_fixed, color: Colors.white, size: 18),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildErrorSummary(BuildContext context, Color color) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _statCard('Azimuth Error', '${pointingError.deltaAzimuth.toStringAsFixed(1)}°', color),
-          _statCard('Elevation Error', '${pointingError.deltaElevation.toStringAsFixed(1)}°', color),
-        ],
-      ),
-    );
-  }
-
-  Widget _statCard(String label, String value, Color color) {
-    return Expanded(
-      child: Card(
-        elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Text(value, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDetailedStats(BuildContext context) {
-    final pos = pointingError.pose.position;
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Card(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: ExpansionTile(
-          title: const Text('Diagnostics & Sensor Fusion', style: TextStyle(fontSize: 14)),
-          children: [
-            ListTile(
-              title: const Text('Filtered Position (Local ENU)'),
-              subtitle: Text('E: ${pos.x.toStringAsFixed(2)}m, N: ${pos.y.toStringAsFixed(2)}m, U: ${pos.z.toStringAsFixed(2)}m'),
-            ),
-            ListTile(
-              title: const Text('Target Location'),
-              subtitle: Text(pointingError.targetAccessPoint.name),
-            ),
-            ListTile(
-              title: const Text('Last Packet Sent'),
-              trailing: const Icon(Icons.bluetooth_connected, color: Colors.blue),
-              subtitle: Text('ID: ${pointingError.timestamp.millisecondsSinceEpoch}'),
-            ),
-          ],
-        ),
       ),
     );
   }
 
   Color _getErrorColor(double totalError) {
-    if (totalError < 1.0) return Colors.green;
-    if (totalError < 5.0) return Colors.orange;
-    return Colors.red;
+    if (totalError < 1.0) return Colors.greenAccent;
+    if (totalError < 5.0) return Colors.orangeAccent;
+    return Colors.redAccent;
   }
 }

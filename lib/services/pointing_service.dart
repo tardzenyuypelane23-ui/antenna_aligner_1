@@ -23,26 +23,36 @@ class PointingService {
   }
 
   /// Extracts Azimuth and Elevation from a device orientation quaternion.
+  /// Uses a tilt-compensated ground plane projection to eliminate cross-talk.
   /// Azimuth: 0 = North, 90 = East, 180 = South, 270 = West.
   /// Elevation: +90 = Up, -90 = Down.
   Map<String, double> getHeadingFromQuaternion(Quaternion q) {
-    // 1. Define the device's "pointing" direction in its local frame.
-    // For most Android/ARCore devices, the camera looks along the negative Z-axis.
+    // 1. Define the device's pointing vector in its local frame.
+    // For an Android phone flat on an antenna structure, the rear camera line-of-sight
+    // points exactly straight down the local negative Z-axis.
     final localForward = Vector3(0, 0, -1);
-    
-    // 2. Rotate the local forward vector into the global ARCore world frame.
-    // In ARCore world frame: Y is Up, X is Right, Z is Back.
+
+    // 2. Rotate the local pointing vector into the global True-North ENU world frame.
+    // Because the EKF state orientation is now pre-aligned inside FusionService:
+    // worldForward.x represents the Easting vector component.
+    // worldForward.y represents the Northing vector component.
+    // worldForward.z represents the vertical Elevation component.
     final worldForward = q.rotated(localForward);
 
-    // 3. Calculate Azimuth (bearing) in the horizontal (X-Z) plane.
-    // We treat -Z as "AR North" and X as "AR East".
-    // atan2(East, North) -> atan2(x, -z)
-    double azimuth = _radiansToDegrees(atan2(worldForward.x, -worldForward.z));
+    // 3. Tilt-Compensated Azimuth Calculation:
+    // To prevent vertical tilt (pitch) from polluting or swinging the azimuth (yaw),
+    // we calculate the bearing using the East (x) and North (y) components.
+    // atan2(East, North) matches your computeAzimuthENU matrix implementation.
+    double azimuth = _radiansToDegrees(atan2(worldForward.x, worldForward.y));
+
+    // Normalize the compass projection strictly to a clean [0, 360) degree space.
     azimuth = (azimuth + 360) % 360;
 
-    // 4. Calculate Elevation (angle from horizontal plane X-Z).
-    final horizontalDist = sqrt(worldForward.x * worldForward.x + worldForward.z * worldForward.z);
-    final elevation = _radiansToDegrees(atan2(worldForward.y, horizontalDist));
+    // 4. Clean Elevation Calculation:
+    // We isolate the elevation angle using the vertical displacement against
+    // the horizontal distance magnitude on the ground plane.
+    final horizontalDist = sqrt(worldForward.x * worldForward.x + worldForward.y * worldForward.y);
+    final elevation = _radiansToDegrees(atan2(worldForward.z, horizontalDist));
 
     return {
       'azimuth': azimuth,
@@ -50,10 +60,11 @@ class PointingService {
     };
   }
 
+
   /// Calculates the correction required to move from source to target.
   /// Returns values in range [-180, 180].
-  /// Positive Azimuth error: Target is CLOCKWISE (Right) of current.
-  /// Positive Elevation error: Target is ABOVE (Up) current.
+  /// Positive Azimuth error: Target is CLOCKWISE (Right) of current orientation.
+  /// Positive Elevation error: Target is ABOVE (Up) current orientation.
   PointingError computePointingError({
     required GeoPosition currentLocation,
     required AccessPoint targetAccessPoint,
@@ -63,9 +74,15 @@ class PointingService {
     required double targetElevation,
     required EKFState pose,
   }) {
+    // 1. Calculate clean angular deltas using a [-180, 180] wrapping mechanism.
+    // This stops your tracking needle from wrapping all the way around when crossing 0°/360°.
     final deltaAz = _normalizeAngle(targetAzimuth - sourceAzimuth);
-    final deltaEl = targetElevation - sourceElevation; // Elevation doesn't wrap 360
+    final deltaEl = targetElevation - sourceElevation;
 
+    // 2. Initialize the error payload container.
+    // Note: The distance property is initialized here at 0.0 for safety,
+    // and is immediately overwritten with the true EKF Euclidean metric distance
+    // inside the calling FusionService._processAndEmit() pipeline.
     return PointingError(
       currentLocation: currentLocation,
       targetAccessPoint: targetAccessPoint,
@@ -76,9 +93,11 @@ class PointingService {
       deltaAzimuth: deltaAz,
       deltaElevation: deltaEl,
       pose: pose,
+      distance: 0.0,
       timestamp: DateTime.now(),
     );
   }
+
 
   // Legacy LLA methods kept for compatibility or rough distance
   double computeTargetAzimuth(GeoPosition source, AccessPoint target) {

@@ -13,6 +13,7 @@ class PointingError {
     required this.deltaAzimuth,
     required this.deltaElevation,
     required this.pose,
+    required this.distance,
     required this.timestamp,
   });
 
@@ -25,5 +26,6 @@ class PointingError {
   final double deltaAzimuth;
   final double deltaElevation;
   final EKFState pose;
+  final double distance;
   final DateTime timestamp;
 }
