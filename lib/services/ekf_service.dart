@@ -42,32 +42,41 @@ class EKFService {
     );
   }
 
-  /// Update Step: Correct the state using absolute GNSS coordinates
   EKFState updateWithGNSS(EKFState state, Vector3 measuredGpsPos) {
-    // 1. Calculate Innovation (Difference between GPS and Predicted)
+    // 1. Innovation (GPS - predicted)
     final innovation = measuredGpsPos - state.position;
 
-    // 2. Calculate Kalman Gain K = P / (P + R)
-    // Simplified scalar-like update for each dimension
-    final double pVal = state.covariance.entry(0, 0);
-    final double kPos = pVal / (pVal + _gpsNoise);
-
-    // 3. Update State
-    final correctedPos = state.position + (innovation * kPos);
-
-    // 4. Update Covariance P = (I - K) * P
+    // 2. Per-axis Kalman gains using diagonal covariance entries
+    //    K_i = P_ii / (P_ii + R_i)
+    //    Here we use _gpsNoise as R for each axis but you can make R a Vector3 if needed.
     final newCovariance = state.covariance.clone();
-    for (int i = 0; i < 3; i++) {
-      double currentVal = newCovariance.entry(i, i);
-      newCovariance.setEntry(i, i, (1.0 - kPos) * currentVal);
-    }
+
+    final double pX = newCovariance.entry(0, 0);
+    final double pY = newCovariance.entry(1, 1);
+    final double pZ = newCovariance.entry(2, 2);
+
+    final double kx = pX / (pX + _gpsNoise);
+    final double ky = pY / (pY + _gpsNoise);
+    final double kz = pZ / (pZ + _gpsNoise);
+
+    // 3. Correct state per axis using the innovation and per-axis gains
+    final correctedPx = state.position.x + innovation.x * kx;
+    final correctedPy = state.position.y + innovation.y * ky;
+    final correctedPz = state.position.z + innovation.z * kz;
+
+    // 4. Update covariance diagonals: P = (I - K) * P
+    newCovariance.setEntry(0, 0, (1.0 - kx) * pX);
+    newCovariance.setEntry(1, 1, (1.0 - ky) * pY);
+    newCovariance.setEntry(2, 2, (1.0 - kz) * pZ);
 
     return EKFState(
-      position: correctedPos,
+      position: Vector3(correctedPx, correctedPy, correctedPz),
       velocity: state.velocity,
       orientation: state.orientation,
       covariance: newCovariance,
       timestamp: DateTime.now(),
     );
   }
+
+
 }

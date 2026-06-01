@@ -5,6 +5,8 @@ import 'package:antenna_aligner/models/pointing_error.dart';
 import 'package:antenna_aligner/services/geolocator_service.dart';
 import 'package:vector_math/vector_math_64.dart';
 
+import '../utils/transform.dart';
+
 class PointingService {
   PointingService._internal();
   static final PointingService instance = PointingService._internal();
@@ -13,52 +15,41 @@ class PointingService {
   double computeAzimuthENU(Vector3 currentEnu, Vector3 targetEnu) {
     final delta = targetEnu - currentEnu;
     // atan2(East, North) gives bearing from North
-    return (_radiansToDegrees(atan2(delta.x, delta.y)) + 360) % 360;
+    return wrap360(radToDeg(atan2(delta.x, delta.y)));
   }
 
   double computeElevationENU(Vector3 currentEnu, Vector3 targetEnu) {
     final delta = targetEnu - currentEnu;
     final horizontalDistance = sqrt(delta.x * delta.x + delta.y * delta.y);
-    return _radiansToDegrees(atan2(delta.z, horizontalDistance));
+    return radToDeg(atan2(delta.z, horizontalDistance));
   }
 
-  /// Extracts Azimuth and Elevation from a device orientation quaternion.
-  /// Uses a tilt-compensated ground plane projection to eliminate cross-talk.
-  /// Azimuth: 0 = North, 90 = East, 180 = South, 270 = West.
-  /// Elevation: +90 = Up, -90 = Down.
-  Map<String, double> getHeadingFromQuaternion(Quaternion q) {
-    // 1. Define the device's pointing vector in its local frame.
-    // For an Android phone flat on an antenna structure, the rear camera line-of-sight
-    // points exactly straight down the local negative Z-axis.
+  /// q must already be remapped to ENU (use a single helper arcoreToEnuQuaternion before calling).
+  /// headingOffset is in degrees and is applied only here (single source of truth).
+  Map<String, double> getHeadingFromARCore(Quaternion q, double headingOffset) {
+    // 0. Defensive: ensure quaternion is normalized
+    final enuQuat = Quaternion(q.x, q.y, q.z, q.w)..normalize();
+
+    // 1. Camera forward vector in device local frame (camera looks along -Z)
     final localForward = Vector3(0, 0, -1);
 
-    // 2. Rotate the local pointing vector into the global True-North ENU world frame.
-    // Because the EKF state orientation is now pre-aligned inside FusionService:
-    // worldForward.x represents the Easting vector component.
-    // worldForward.y represents the Northing vector component.
-    // worldForward.z represents the vertical Elevation component.
-    final worldForward = q.rotated(localForward);
+    // 2. Rotate the local forward vector into ENU world frame
+    final worldForward = enuQuat.rotated(localForward);
 
-    // 3. Tilt-Compensated Azimuth Calculation:
-    // To prevent vertical tilt (pitch) from polluting or swinging the azimuth (yaw),
-    // we calculate the bearing using the East (x) and North (y) components.
-    // atan2(East, North) matches your computeAzimuthENU matrix implementation.
-    double azimuth = _radiansToDegrees(atan2(worldForward.x, worldForward.y));
+    // 3. Azimuth: atan2(East, North) -> degrees in [-180,180], then wrap to [0,360)
+    double azimuth = radToDeg(atan2(worldForward.x, worldForward.y));
+    azimuth = wrap360(azimuth + headingOffset);
 
-    // Normalize the compass projection strictly to a clean [0, 360) degree space.
-    azimuth = (azimuth + 360) % 360;
-
-    // 4. Clean Elevation Calculation:
-    // We isolate the elevation angle using the vertical displacement against
-    // the horizontal distance magnitude on the ground plane.
+    // 4. Elevation: angle above horizontal plane (degrees). Normalize to [-180,180] for safety.
     final horizontalDist = sqrt(worldForward.x * worldForward.x + worldForward.y * worldForward.y);
-    final elevation = _radiansToDegrees(atan2(worldForward.z, horizontalDist));
+    double elevation = normalizeSigned(radToDeg(atan2(worldForward.z, horizontalDist)));
 
     return {
       'azimuth': azimuth,
       'elevation': elevation,
     };
   }
+
 
 
   /// Calculates the correction required to move from source to target.
@@ -76,7 +67,7 @@ class PointingService {
   }) {
     // 1. Calculate clean angular deltas using a [-180, 180] wrapping mechanism.
     // This stops your tracking needle from wrapping all the way around when crossing 0°/360°.
-    final deltaAz = _normalizeAngle(targetAzimuth - sourceAzimuth);
+    final deltaAz = normalizeSigned(targetAzimuth - sourceAzimuth);
     final deltaEl = targetElevation - sourceElevation;
 
     // 2. Initialize the error payload container.
@@ -101,31 +92,22 @@ class PointingService {
 
   // Legacy LLA methods kept for compatibility or rough distance
   double computeTargetAzimuth(GeoPosition source, AccessPoint target) {
-    final lat1 = _degreesToRadians(source.latitude);
-    final lat2 = _degreesToRadians(target.latitude);
-    final dLon = _degreesToRadians(target.longitude - source.longitude);
+    final lat1 = degToRad(source.latitude);
+    final lat2 = degToRad(target.latitude);
+    final dLon = degToRad(target.longitude - source.longitude);
 
     final y = sin(dLon) * cos(lat2);
     final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
-    return (_radiansToDegrees(atan2(y, x)) + 360) % 360;
+    return wrap360(radToDeg(atan2(y, x)));
   }
 
   double computeTargetElevation(GeoPosition source, AccessPoint target) {
-    final lat1 = _degreesToRadians(source.latitude);
+    final lat1 = degToRad(source.latitude);
     final deltaLat = (target.latitude - source.latitude) * 111000.0;
     final deltaLon = (target.longitude - source.longitude) * 111000.0 * cos(lat1);
     final horizontalDistance = sqrt(deltaLat * deltaLat + deltaLon * deltaLon);
     final verticalDistance = target.altitude - source.altitude;
-    return _radiansToDegrees(atan2(verticalDistance, horizontalDistance));
+    return radToDeg(atan2(verticalDistance, horizontalDistance));
   }
 
-  double _normalizeAngle(double angle) {
-    var normalized = angle % 360;
-    if (normalized > 180) normalized -= 360;
-    if (normalized < -180) normalized += 360;
-    return normalized;
-  }
-
-  double _degreesToRadians(double degrees) => degrees * pi / 180.0;
-  double _radiansToDegrees(double radians) => radians * 180.0 / pi;
 }

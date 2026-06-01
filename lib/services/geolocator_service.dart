@@ -17,7 +17,7 @@ class GeolocatorService {
   GeolocatorService._internal();
   static final GeolocatorService instance = GeolocatorService._internal();
 
-  /// Real-time hardware GNSS stream
+  /// Real-time hardware GNSS stream used by fusionService
   Stream<GeoPosition> get positionUpdates {
     return Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -41,6 +41,7 @@ class GeolocatorService {
       altitude: pos.altitude,
     );
   }
+
 
   Future<void> requestPermissions() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();

@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:vector_math/vector_math_64.dart';
+import '../utils/transform.dart';
 
 class CoordinateService {
   CoordinateService._internal();
@@ -12,8 +13,8 @@ class CoordinateService {
 
   /// Converts Geodetic (Lat, Lon, Alt) to ECEF (Earth-Centered, Earth-Fixed) meters
   Vector3 llaToEcef(double lat, double lon, double alt) {
-    final radLat = _degToRad(lat);
-    final radLon = _degToRad(lon);
+    final radLat = degToRad(lat);
+    final radLon = degToRad(lon);
 
     final n = _wgs84A / sqrt(1 - _wgs84E2 * sin(radLat) * sin(radLat));
 
@@ -26,8 +27,8 @@ class CoordinateService {
 
   /// Converts ECEF to Local ENU (East, North, Up) relative to a reference point
   Vector3 ecefToEnu(Vector3 currentEcef, Vector3 refLla, Vector3 refEcef) {
-    final radLat = _degToRad(refLla.x);
-    final radLon = _degToRad(refLla.y);
+    final radLat = degToRad(refLla.x);
+    final radLon = degToRad(refLla.y);
 
     final delta = currentEcef - refEcef;
 
@@ -38,6 +39,4 @@ class CoordinateService {
     return Vector3(t, n, u); // East, North, Up
   }
 
-  double _degToRad(double deg) => deg * pi / 180.0;
-  double radToDeg(double rad) => rad * 180.0 / pi;
 }
