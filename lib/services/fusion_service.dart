@@ -3,11 +3,13 @@ import 'package:antenna_aligner/models/access_point.dart';
 import 'package:antenna_aligner/models/ekf_state.dart';
 import 'package:antenna_aligner/models/pointing_error.dart';
 import 'package:antenna_aligner/services/arcore_service.dart';
+import 'package:antenna_aligner/services/bluetooth_service.dart';
 import 'package:antenna_aligner/services/compass_service.dart';
 import 'package:antenna_aligner/services/coordinate_service.dart';
 import 'package:antenna_aligner/services/ekf_service.dart';
 import 'package:antenna_aligner/services/geolocator_service.dart';
 import 'package:antenna_aligner/services/pointing_service.dart';
+import 'package:antenna_aligner/services/settings_service.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 import '../utils/transform.dart';
@@ -20,6 +22,11 @@ class FusionService {
   AccessPoint? _targetAP;
   double _headingOffset = 0.0; 
   bool _isCalibrated = false;
+  bool _isAutoAligning = false;
+  bool get isAutoAligning => _isAutoAligning;
+
+  final StreamController<bool> _autoAlignController = StreamController<bool>.broadcast();
+  Stream<bool> get autoAlignStream => _autoAlignController.stream;
 
   final List<double> _magSamples = [];
   final int _magSampleWindow = 20;
@@ -65,8 +72,11 @@ class FusionService {
     _lastArPose = null;
     _setStatus("Initializing Sensors...");
     
-    if (_refLla != null && _refEcef != null) {
-      _updateTargetEnu();
+    // Auto-connect Bluetooth if enabled
+    if (SettingsService.instance.enableBluetooth) {
+      BluetoothService.instance.connect().catchError((e) {
+        print("BT Auto-connect failed: $e");
+      });
     }
     
     _poseSub = ArCoreService.instance.poseUpdates.listen((pose) {
@@ -170,7 +180,15 @@ class FusionService {
     _refEcef = null;
     _targetEnu = null;
     _isCalibrated = false;
+    _isAutoAligning = false;
     _setStatus("Stopped");
+  }
+
+  void toggleAutoAlign() {
+    _isAutoAligning = !_isAutoAligning;
+    _autoAlignController.add(_isAutoAligning);
+    _setStatus(_isAutoAligning ? "Auto-Alignment Active" : "Auto-Alignment Paused");
+    _processAndEmit();
   }
 
   void _predict(ArCorePose pose) {
@@ -324,6 +342,11 @@ class FusionService {
     );
 
     _errorController.add(_lastError!);
+
+    // Forward to Bluetooth hardware only if auto-alignment is enabled
+    if (_isAutoAligning && SettingsService.instance.enableBluetooth && BluetoothService.instance.isConnected) {
+      BluetoothService.instance.sendPointingData(_lastError!);
+    }
   }
 
 

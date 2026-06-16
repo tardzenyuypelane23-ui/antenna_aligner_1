@@ -10,74 +10,95 @@ class BluetoothService {
 
   fbp.BluetoothDevice? _connectedDevice;
   fbp.BluetoothCharacteristic? _writeCharacteristic;
+  
   bool get isConnected => _connectedDevice != null && _writeCharacteristic != null;
+  String? get connectedDeviceName => _connectedDevice?.platformName ?? _connectedDevice?.remoteId.str;
 
   DateTime _lastSent = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _isConnecting = false;
 
-  /// Scans for and connects to the Arduino Bluetooth module (typically HC-05/06 or ESP32)
-  Future<void> connect() async {
-    // 1. Check if Bluetooth is on
+  final StreamController<List<fbp.ScanResult>> _scanResultsController = StreamController<List<fbp.ScanResult>>.broadcast();
+  Stream<List<fbp.ScanResult>> get scanResults => _scanResultsController.stream;
+
+  final StreamController<bool> _connectionStateController = StreamController<bool>.broadcast();
+  Stream<bool> get connectionStateStream => _connectionStateController.stream;
+
+  Future<void> startScan() async {
     if (await fbp.FlutterBluePlus.adapterState.first != fbp.BluetoothAdapterState.on) {
       return Future.error("Bluetooth is turned off");
     }
-
-    // 2. Start scanning
-    fbp.FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
-
-    Completer<void> completer = Completer();
-
-    var subscription = fbp.FlutterBluePlus.scanResults.listen((results) async {
-      for (fbp.ScanResult r in results) {
-        if (r.device.platformName.contains("Antenna") || r.device.platformName.contains("ESP32")) {
-          fbp.FlutterBluePlus.stopScan();
-          _connectedDevice = r.device;
-          
-          try {
-            await _connectedDevice!.connect();
-            // Prefixing with fbp. to avoid collision with this class name
-            List<fbp.BluetoothService> services = await _connectedDevice!.discoverServices();
-            
-            // Look for a writable characteristic
-            for (var service in services) {
-              for (var characteristic in service.characteristics) {
-                if (characteristic.properties.write) {
-                  _writeCharacteristic = characteristic;
-                  break;
-                }
-              }
-              if (_writeCharacteristic != null) break;
-            }
-            if (!completer.isCompleted) completer.complete();
-          } catch (e) {
-            if (!completer.isCompleted) completer.completeError(e);
-          }
-          break;
-        }
-      }
+    
+    fbp.FlutterBluePlus.scanResults.listen((results) {
+      _scanResultsController.add(results);
     });
 
+    await fbp.FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+  }
+
+  Future<void> stopScan() async {
+    await fbp.FlutterBluePlus.stopScan();
+  }
+
+  /// Connects to a specific device selected by the user
+  Future<void> connectToDevice(fbp.BluetoothDevice device) async {
+    if (_isConnecting) return;
+    _isConnecting = true;
+
     try {
-      await completer.future.timeout(const Duration(seconds: 10));
-    } on TimeoutException {
-      fbp.FlutterBluePlus.stopScan();
-      subscription.cancel();
-      throw TimeoutException("Could not find Arduino device");
+      await stopScan();
+      
+      // Disconnect existing if any
+      await disconnect();
+
+      print("BT: Connecting to ${device.platformName}...");
+      await device.connect(timeout: const Duration(seconds: 10));
+      
+      await _setupDevice(device);
+      _connectionStateController.add(true);
+    } catch (e) {
+      print("BT: Connection failed: $e");
+      _connectionStateController.add(false);
+      rethrow;
     } finally {
-      subscription.cancel();
+      _isConnecting = false;
     }
+  }
+
+  /// Original connect method modified to auto-reconnect to last known if possible, 
+  /// or just do nothing if no device is specified.
+  Future<void> connect() async {
+    // For now, if called without arguments, we don't know which device to pick 
+    // unless we implement persistence.
+    print("BT: connect() called without device. Use connectToDevice() for manual selection.");
+  }
+
+  Future<void> _setupDevice(fbp.BluetoothDevice device) async {
+    print("BT: Discovering services for ${device.platformName}...");
+    List<fbp.BluetoothService> services = await device.discoverServices();
+    
+    for (var service in services) {
+      for (var characteristic in service.characteristics) {
+        if (characteristic.properties.write || characteristic.properties.writeWithoutResponse) {
+          _writeCharacteristic = characteristic;
+          _connectedDevice = device;
+          print("BT: Found writable characteristic: ${characteristic.uuid}");
+          return;
+        }
+      }
+    }
+    throw Exception("No writable characteristic found on device");
   }
 
   Future<void> disconnect() async {
     await _connectedDevice?.disconnect();
     _connectedDevice = null;
     _writeCharacteristic = null;
+    _connectionStateController.add(false);
   }
 
-  /// Sends the pointing error to the Arduino in real-time.
   Future<void> sendPointingData(PointingError error) async {
     if (!isConnected) return;
 
-    // Power Save Logic: Throttle data transmission if errors are small
     if (SettingsService.instance.powerSaveMode) {
       final totalError = error.deltaAzimuth.abs() + error.deltaElevation.abs();
       final timeSinceLast = DateTime.now().difference(_lastSent).inMilliseconds;
@@ -88,21 +109,26 @@ class BluetoothService {
     }
 
     final packet = {
-      "pan_error": error.deltaAzimuth.toStringAsFixed(2),
-      "tilt_error": error.deltaElevation.toStringAsFixed(2),
-      "timestamp": DateTime.now().millisecondsSinceEpoch,
+      "pan_error": error.deltaAzimuth,
+      "tilt_error": error.deltaElevation,
     };
 
     final jsonString = jsonEncode(packet);
     
     try {
-      await _writeCharacteristic!.write(utf8.encode("$jsonString\n"), withoutResponse: true);
+      await _writeCharacteristic!.write(
+        utf8.encode("$jsonString\n"), 
+        withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse
+      );
       _lastSent = DateTime.now();
-      // ignore: avoid_print
       print("BT_TX SUCCESS: $jsonString");
     } catch (e) {
-      // ignore: avoid_print
       print("BT_TX FAILED: $e");
+      if (e.toString().contains("disconnected")) {
+        _connectedDevice = null;
+        _writeCharacteristic = null;
+        _connectionStateController.add(false);
+      }
     }
   }
 }

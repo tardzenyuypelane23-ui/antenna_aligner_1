@@ -122,10 +122,19 @@ class _APManagerScreenState extends State<APManagerScreen> {
     });
 
     try {
-      final position = await GeolocatorService.instance.getCurrentPosition();
+      // Use a 5-second window of readings for a reliable location average
+      final position = await GeolocatorService.instance.getAveragedPosition(
+        duration: const Duration(seconds: 5)
+      );
       _latitudeController.text = position.latitude.toString();
       _longitudeController.text = position.longitude.toString();
       _altitudeController.text = position.altitude.toString();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location captured and averaged over 5 seconds.')),
+        );
+      }
     } catch (e) {
       _showError("Failed to capture location: $e");
     } finally {

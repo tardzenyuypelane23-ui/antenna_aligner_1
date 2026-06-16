@@ -7,6 +7,10 @@ import 'package:antenna_aligner/models/pointing_error.dart';
 import 'package:antenna_aligner/services/database_service.dart';
 import 'package:antenna_aligner/services/fusion_service.dart';
 import 'package:antenna_aligner/widgets/alignment_display.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+import '../services/bluetooth_service.dart';
 
 class AlignmentScreen extends StatefulWidget {
   const AlignmentScreen({super.key});
@@ -22,11 +26,13 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
   @override
   void initState() {
     super.initState();
+    WakelockPlus.enable();
     _initializeAlignment();
   }
 
   @override
   void dispose() {
+    WakelockPlus.disable();
     FusionService.instance.stop();
     ArCoreService.instance.dispose();
     super.dispose();
@@ -50,6 +56,14 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
           SnackBar(content: Text('Location error: $e')),
         );
       }
+    }
+
+    // 3. Request Bluetooth Permissions (If enabled)
+    if (SettingsService.instance.enableBluetooth) {
+      await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
     }
 
     final accessPoints = await DatabaseService.instance.getAccessPoints();
@@ -110,7 +124,9 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.settings_bluetooth),
-            onPressed: () => Navigator.pushNamed(context, '/settings'),
+            onPressed: () => Navigator.pushNamed(context, '/settings').then((_) {
+              if (mounted) _initializeAlignment();
+            }),
           ),
         ],
       ),
@@ -210,7 +226,60 @@ class _AlignmentScreenState extends State<AlignmentScreen> {
                   label: "GPS",
                   icon: Icons.location_on,
                 ),
+                const SizedBox(width: 8),
+                StreamBuilder<bool>(
+                  stream: Stream.periodic(const Duration(seconds: 2)).map((_) => BluetoothService.instance.isConnected),
+                  initialData: BluetoothService.instance.isConnected,
+                  builder: (context, snapshot) {
+                    final isConnected = snapshot.data ?? false;
+                    if (!SettingsService.instance.enableBluetooth) return const SizedBox.shrink();
+                    return _StatusIconRaw(
+                      isActive: isConnected,
+                      label: "BT",
+                      icon: Icons.bluetooth,
+                    );
+                  },
+                ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusIconRaw extends StatelessWidget {
+  final bool isActive;
+  final String label;
+  final IconData icon;
+
+  const _StatusIconRaw({
+    required this.isActive,
+    required this.label,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: (isActive ? Colors.green : Colors.red).withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: isActive ? Colors.green : Colors.red),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: isActive ? Colors.green : Colors.red),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              color: isActive ? Colors.green : Colors.red,
             ),
           ),
         ],

@@ -95,23 +95,45 @@ class AlignmentDisplay extends StatelessWidget {
   }
 
   Widget _buildCalibrationTools(BuildContext context) {
-    return Center(
-      child: ElevatedButton.icon(
-        onPressed: () {
-          FusionService.instance.calibrateNorth();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Heading Calibrated to North')),
-          );
-        },
-        icon: const Icon(Icons.compass_calibration),
-        label: const Text('CALIBRATE NORTH'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.blueGrey.shade900.withAlpha(200),
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          side: const BorderSide(color: Colors.white24),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        StreamBuilder<bool>(
+          stream: FusionService.instance.autoAlignStream,
+          initialData: FusionService.instance.isAutoAligning,
+          builder: (context, snapshot) {
+            final isAutoAligning = snapshot.data ?? false;
+            return ElevatedButton.icon(
+              onPressed: () => FusionService.instance.toggleAutoAlign(),
+              icon: Icon(isAutoAligning ? Icons.stop_circle : Icons.play_circle_filled),
+              label: Text(isAutoAligning ? 'STOP AUTO-ALIGN' : 'START AUTO-ALIGN'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isAutoAligning ? Colors.red.withAlpha(200) : Colors.green.withAlpha(200),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            );
+          },
         ),
-      ),
+        const SizedBox(height: 16),
+        ElevatedButton.icon(
+          onPressed: () {
+            FusionService.instance.calibrateNorth();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Heading Calibrated to North')),
+            );
+          },
+          icon: const Icon(Icons.compass_calibration),
+          label: const Text('CALIBRATE NORTH'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blueGrey.shade900.withAlpha(200),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            side: const BorderSide(color: Colors.white24),
+          ),
+        ),
+      ],
     );
   }
 
